@@ -137,3 +137,9 @@ int channel_write(channel_t c,void *buf);
 int channel_read(channel_t c,void *buf);
 channel_t channel_select(int need_default,char *fmt,...);
 ```
+## build
+###linux 
+    * build install libuv ,see https://github.com/libuv/libuv
+    * make
+
+
