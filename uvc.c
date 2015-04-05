@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,35 +12,30 @@
 
 //----------------------------------------------defaultloop----------------------------------------------------
 static uv_key_t uvc_key;
-static uv_once_t once;  
-typedef struct uvc_stack_node{
-	uvc_ctx *ctx;
-	struct uvc_stack_node *next;
-}uvc_stack_node;
+static uv_once_t once;
 
-
-typedef struct uvc_stack{
-	uvc_stack_node *top;
-}uvc_stack;
-
-static uvc_stack_node *uvc_stack_pop(uvc_stack *stack){
-	if(stack->top==NULL)return NULL;
-	uvc_stack_node *top=stack->top;
-	stack->top = top->next;
-	return top;
+static uvc_stack_push(queue_t *stack, uvc_ctx *ctx){
+	queue_insert_tail(stack, &ctx->s_node);
+	//que(stack, &ctx->s_node);
 }
 
-static void uvc_stack_push(uvc_stack *stack, uvc_stack_node *node){
-	if (stack->top ==NULL){
-		stack->top=node;
-		node->next=NULL;
-	}else{
-		node->next=stack->top;
-		stack->top=node;
-	}
+uvc_ctx *uvc_stack_pop(queue_t *stack){
+	queue_t *node=NULL;
+	//assert(!queue_empty(stack));
+	node=queue_last(stack);
+	queue_remove(node);
+	return queue_data(node, uvc_ctx, s_node);
+	
 }
 
-typedef int32_t channel_t;
+uvc_ctx *uvc_stack_top(queue_t *stack){
+	queue_t *node = NULL;
+	//assert(!queue_empty(stack));
+	node = queue_last(stack);
+	return queue_data(node, uvc_ctx, s_node);
+}
+
+
 typedef struct {
 	size_t size;
 	size_t cnt;
@@ -73,8 +67,9 @@ typedef struct channel_pool_s channel_pool;
 typedef struct {
 	uv_loop_t *loop;
 	coro_context ctx;
-	uvc_stack stack;
+	queue_t stack;
 	channel_pool pool;
+	uv_timer_t schedule_timer;
 	//stacks
 }uvc_thread_env;
 
@@ -82,21 +77,22 @@ void uvc_init(void){
 	uv_key_create(&uvc_key);
 }
 static uvc_thread_env *uvc_get_env(){
+	uvc_ctx *ctx = NULL;
 	uv_once(&once,uvc_init);
 	uvc_thread_env *env=(uvc_thread_env *)uv_key_get(&uvc_key);
 	if(env==NULL){
 		env=(uvc_thread_env *)malloc(sizeof(uvc_thread_env));
 		memset(env,0,sizeof(uvc_thread_env));
 		env->loop = uv_loop_new();
-		env->stack.top=(uvc_stack_node *)malloc(sizeof(uvc_stack_node));
-		env->stack.top->ctx =uvc_create(0,NULL,NULL);
-		env->stack.top->next=NULL;
+		queue_init(&env->stack);
+		ctx = uvc_create(0, NULL, NULL);
+		uvc_stack_push(&env->stack, ctx);
 		uv_key_set(&uvc_key,env);
 	}
 	return env;
 }
 
-static uv_loop_t* uvc_loop_default(){
+uv_loop_t* uvc_loop_default(){
 	uvc_thread_env *env=uvc_get_env();
 #ifdef UVC_DEBUG
 	if(env ==NULL || env->loop==NULL){
@@ -116,15 +112,29 @@ static channel_pool *get_chan_pool(){
 static uvc_ctx *uvc_self(){
 	uvc_thread_env *env=uvc_get_env();
 #ifdef UVC_DEBUG
-	if(env ==NULL || env->stack.top==NULL || env->stack.top->ctx ==NULL){
+	if(env ==NULL || queue_empty(&env->stack)){
 		assert("env ==NULL || env->stack.top==NULL || env->stack.top->ctx ==NULL");
 	}
 #endif
-	return env->stack.top->ctx;
+	return uvc_stack_top(&env->stack);
 }
 
+
+
+#if OLD_LIBUV
+static void schedule_timer_cb(uv_timer_t *timer,  int status){
+#else
+void schedule_timer_cb(uv_timer_t *timer){
+#endif
+	return;
+}
+
+
 void uvc_schedule(){
-	uv_run(uvc_loop_default(),UV_RUN_DEFAULT);
+	uvc_thread_env *env = uvc_get_env();
+	uv_timer_init(env->loop, &env->schedule_timer);
+	uv_timer_start(&env->schedule_timer, schedule_timer_cb, 1000, 1000);
+	uv_run(env->loop, UV_RUN_DEFAULT);
 }
 
 //----------------------------------------------base----------------------------------------------------
@@ -170,34 +180,52 @@ void uvc_yield(){
 	uvc_thread_env *env=uvc_get_env();
 	uvc_ctx* prev=NULL;
 	uvc_ctx* next=NULL;
-	uvc_stack_node *node;
-	node=uvc_stack_pop(&env->stack);
-	prev=node->ctx;
-	next = env->stack.top->ctx;
+	prev = uvc_stack_pop(&env->stack);
+	next = uvc_stack_top(&env->stack);
 	coro_transfer(&prev->cur,&next->cur);
 }
 
 void uvc_resume(uvc_ctx *ctx){
 	uvc_thread_env *env=uvc_get_env();
 	uvc_ctx *prev=uvc_self();
-	uvc_stack_node node;
-	node.ctx=ctx;
-	uvc_stack_push(&env->stack,&node);
+	uvc_stack_push(&env->stack, ctx);
 	coro_transfer(&prev->cur,&ctx->cur);
 }
 
-int uvc_io_create(uvc_io *io,uv_handle_type type)
+static void uvc_timer_close_cb(uv_handle_t *handle){
+	uvc_resume((uvc_ctx *)handle->data);
+}
+
+#if OLD_LIBUV
+static void uvc_timer_cb(uv_timer_t* handle, int status){
+#else
+static void uvc_timer_cb(uv_timer_t* handle){
+#endif
+	uvc_resume((uvc_ctx *)handle->data);
+}
+
+void uvc_sleep(uint64_t msec){
+	uv_timer_t timer;
+	timer.data = uvc_self();
+	uv_timer_init(uvc_loop_default(), &timer);
+	uv_timer_start(&timer, uvc_timer_cb, msec, 0);
+	uvc_yield();
+	uv_close((uv_handle_t *)&timer, uvc_timer_close_cb);
+	uvc_yield();
+}
+
+int uvc_io_create(uvc_io *io, uvc_io_type_t type)
 {
 	uv_handle_t *h;
 	memset(io,0,sizeof(uvc_io));
 	switch(type){
-	case UV_TCP:
+	case UVC_IO_TCP:
 		h = (uv_handle_t *)malloc(sizeof(uv_tcp_t));
 		uv_tcp_init(uvc_loop_default(),(uv_tcp_t *)h);
 		//io->cur=ctx;
 		io->handle=h;
 		break;
-	case UV_FS:
+	case UVC_IO_FS:
 		 h = (uv_handle_t *)malloc(sizeof(uv_fs_t));
 		io->handle=h;
 		break;
@@ -462,7 +490,7 @@ int uvc_queue_work( uv_work_cb cb){
 #define chanbuf_next_start(c) (((c)->start + 1) % (c)->cnt)
 #define chanbuf_next_end(c) (((c)->end + 1) % (c)->cnt)
 #define chanbuf_empty(c) ((c)->start == (c)->end)
-#define chanbuf_full(c)  (chanbuf_next_end(c) == (c)->start)
+#define chanbuf_full(c)  ((c)->cnt==0? 1:(chanbuf_next_end(c) == (c)->start))
 
 static void chanbuf_push(channel *chan,uint8_t *buf){
 	if(!chanbuf_full(chan)){
@@ -487,13 +515,23 @@ channel_pool pool;
 #define channel_pool_remove(p,i) (p)->channels[(i)%MAX_CHANNEL_POOL]=NULL
 static channel *channel_pool_get(channel_pool *pool, channel_t i){
 	channel *chan = pool->channels[(i) % MAX_CHANNEL_POOL];
-	if (chan->id == i){
+	if (chan && chan->id == i){
 		return chan;
 	}
 	return NULL;
 	
 }
 
+static void channel_queue_put(queue_t *q, uvc_ctx *ctx){
+	queue_insert_head(q, &ctx->i_node);
+}
+
+static uvc_ctx *channel_queue_get(queue_t *q){
+	queue_t *node = NULL;
+	node = queue_last(q);
+	queue_remove(node);
+	return queue_data(node, uvc_ctx, i_node);
+}
 
 static int find_empty_slot(channel_pool *pool){
 	int i=0;
@@ -543,8 +581,8 @@ channel_t channel_create(int cnt,int elem_size){
 int channel_close(channel_t c){
 	channel_pool *pool=get_chan_pool();
 	channel *chan;
-	queue_t *node;
 	uvc_ctx *ctx;
+	uvc_ctx *ctx_self;
 	chan=channel_pool_get(pool,c);
 	if(chan == NULL ||chan->id !=c || chan->closeing==1){
 		return -1;
@@ -556,26 +594,24 @@ int channel_close(channel_t c){
 	do
     {
         if(queue_empty(&chan->writq) )break;
-        node = queue_head(&chan->writq);
-        ctx = queue_data(node, uvc_ctx , i_node);
-		queue_remove(node);
+		ctx = channel_queue_get(&chan->writq);
 		uvc_resume(ctx);
     }while(1);
 
 
 	//如果chanbuf中还有数据，那么不能立即关闭管道，
 	//否则发送放无法获知释放已经送达数据。
-    if(chanbuf_empty(chan)){
+	if (chanbuf_empty(chan) && queue_empty(&chan->readq)){
 		free(chan); 
 		channel_pool_remove(pool,c);
 	}else{
+		ctx_self = uvc_self();
 		do
 	    {
 	        if(queue_empty(&chan->readq) )break;
-	        node = queue_head(&chan->readq);
-	        ctx = queue_data(node, uvc_ctx , i_node);
-			queue_remove(node);
-			uvc_resume(ctx);
+			ctx = channel_queue_get(&chan->readq);
+			if (ctx!=ctx_self)
+				uvc_resume(ctx);
 	    }while(1);
 	}
 	
@@ -586,7 +622,6 @@ int channel_write(channel_t c,void *buf){
 	channel *chan = NULL;
 	uvc_ctx *ctx;
 	void *p=NULL;
-	queue_t *node;
 	chan = channel_pool_get(get_chan_pool(), c);
 	if(chan == NULL ||chan->id !=c || chan->closeing==1){
 		return -1;
@@ -596,8 +631,7 @@ int channel_write(channel_t c,void *buf){
 		//buffered channel,and buffer not full
 		chanbuf_push(chan, buf);
 		if(!queue_empty(&chan->readq)){
-			node = queue_head(&chan->readq);
-       		ctx = queue_data(node, uvc_ctx , i_node);
+			ctx = channel_queue_get(&chan->readq);
 			uvc_resume(ctx);
 
 		}
@@ -606,13 +640,12 @@ int channel_write(channel_t c,void *buf){
 	}else{
 		ctx = uvc_self();
 		ctx->cbuf = buf;
-		queue_insert_tail(&chan->writq,&ctx->i_node);
+		channel_queue_put(&chan->writq, ctx);
 		//当readq不为空的时候，writeq一定为空
 		if(queue_empty(&chan->readq)){
 			uvc_yield();
 		}else{
-			node = queue_head(&chan->readq);
-       		ctx = queue_data(node, uvc_ctx , i_node);
+			ctx = channel_queue_get(&chan->readq);
 			uvc_resume(ctx);
 			//return ;
 		}
@@ -633,7 +666,7 @@ int channel_read(channel_t c,void *buf){
 	chan = channel_pool_get(pool,c);
 	if(chan == NULL ||chan->id !=c)return -1;
 	//当管道关闭的时候，buf中数据任然可读
-	if(!chanbuf_empty(chan)){
+	if (!chanbuf_empty(chan) ){
 		chanbuf_pop(chan,buf);
 		if(chan->closeing==1 &&chanbuf_empty(chan)){
 			//管道关闭状态，且buf中数据已经读完，失败chan
@@ -645,21 +678,20 @@ int channel_read(channel_t c,void *buf){
 	}
 	
 	// 没有协程等待写，入队，调度
-	if(queue_empty(&chan->readq) ){
-		queue_insert_tail(&chan->writq, &ctx->i_node);
+	if(queue_empty(&chan->writq) ){
+		channel_queue_put(&chan->readq, ctx);
+		//queue_add(&chan->readq, &ctx->i_node);
 		uvc_yield();
 		if(chan == NULL ||chan->id !=c || chan->closeing==1){
 			return -1;
 		}
-		node = queue_head(&chan->readq);
-        ctx = queue_data(node, uvc_ctx , i_node);
-        memcpy(buf,ctx->cbuf,chan->size);
+		ctx = channel_queue_get(&chan->writq);
+        
 	}else {
-		node = queue_head(&chan->readq);
-        ctx = queue_data(node, uvc_ctx , i_node);
-        memcpy(buf,ctx->cbuf,chan->size);
+		ctx = channel_queue_get(&chan->writq);
 		uvc_resume(ctx);
 	}
+	memcpy(buf, ctx->cbuf, chan->size);
 	return 0;
 
 }
@@ -750,11 +782,11 @@ channel_t channel_select(int need_default,char *fmt,...){
 	    	if(fmt[i]=='r' && channel_readable(c)){
 	    		select_node[i].ext=ctx;
 				chan = channel_pool_get(get_chan_pool(), c);
-	    		queue_insert_tail(&chan->readq, &select_node[i]);
+	    		queue_add(&chan->readq, &select_node[i]);
 	    	}
 	    	else if(fmt[i]=='w' && channel_writeable(c)){
 				chan = channel_pool_get(get_chan_pool(), c);
-	    		queue_insert_tail(&chan->writq, &select_node[i]);
+	    		queue_add(&chan->writq, &select_node[i]);
 	    	}else{
 				assert("unknown fmt :\n");
 	    	}

@@ -6,6 +6,13 @@
 #if __cplusplus
 extern "C" {
 #endif
+typedef enum uvc_io_type_s{
+	UVC_IO_TCP,
+	UVC_IO_UDP,
+	UVC_IO_STREAM,
+	UVC_IO_FS
+}uvc_io_type_t;
+
 
 struct _uvc_ctx{
 	coro_context *prev;
@@ -14,6 +21,7 @@ struct _uvc_ctx{
 	uv_timer_t timer;
 	void *data;
 	queue_t i_node;//for channel queue
+	queue_t s_node;//for stack queue
 	void *cbuf;
 };
 typedef struct _uvc_ctx uvc_ctx;
@@ -33,8 +41,9 @@ typedef struct   _uvc_io{
 	int timeout;
 	uv_file file;
 }uvc_io;
-
-int uvc_io_create(uvc_io *io, uv_handle_type type);
+uv_loop_t* uvc_loop_default();
+void uvc_sleep(uint64_t msec);
+int uvc_io_create(uvc_io *io, uvc_io_type_t type);
 int uvc_tcp_bind(uvc_io *io, char *ip, short port);
 ssize_t uvc_read(uvc_io *io,void *data,size_t len);
 ssize_t uvc_read2(uvc_io *io,void *data,size_t len,uint64_t timeout);
@@ -48,31 +57,14 @@ int uvc_fs_read(uvc_io *io,void *data,ssize_t size);
 int uvc_fs_write(uvc_io *io,void *data,ssize_t size);
 int uvc_fs_close(uvc_io *io);
 int uvc_fs_stat(char *path,uv_stat_t *statbuf);
+int uvc_queue_work(uv_work_cb cb);
 
-typedef struct _chan_node{
-	uvc_ctx *ctx;
-	struct _chan_node *next;
-	void *data;
-	
-}chan_node;
-
-typedef struct _chan_fifo{
-	chan_node *head;
-	chan_node *tail;
-	int cnt;
-}chan_fifo;
-
-typedef struct _uvc_chan{
-	chan_fifo r;
-	chan_fifo w;
-	void *data;
-	int closed;
-	int ref;
-}uvc_chan; 
-
-void uvc_chan_init(uvc_chan *chan);
-void* uvc_chan_read(uvc_chan *chan,uvc_ctx *ctx);
-void uvc_chan_close(uvc_chan *chan,uvc_ctx *ctx);
+typedef int32_t channel_t;
+channel_t channel_create(int cnt, int elem_size);
+int channel_close(channel_t c);
+int channel_write(channel_t c,void *buf);
+int channel_read(channel_t c,void *buf);
+channel_t channel_select(int need_default, char *fmt, ...);
 #if __cplusplus
 }
 #endif
