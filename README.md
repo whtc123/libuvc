@@ -16,11 +16,11 @@ static void download(void *ptr){
     uvc_io *io=ptr;
     ssize_t cnt=0;
     char buf[256];
-     cnt = uvc_read(io,buf,sizeof(buf));
-     if(cnt <=0){
-         goto err;
-     }
-     sprintf(buf,"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nContent-Type: application/zip\r\n\r\n",2735243);
+    cnt = uvc_read(io,buf,sizeof(buf));
+    if(cnt <=0){
+        goto err;
+    }
+    sprintf(buf,"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nContent-Type: application/zip\r\n\r\n",2735243);
     cnt=uvc_write(io,buf,strlen(buf));
     if(cnt!=0){
         goto err;
@@ -42,8 +42,6 @@ static void download(void *ptr){
              printf("uvc_fs_read err:%d\n",cnt);
             break;
         }
-
-
     }
 err:
     uvc_fs_close(fs);
@@ -137,3 +135,9 @@ int channel_write(channel_t c,void *buf);
 int channel_read(channel_t c,void *buf);
 channel_t channel_select(int need_default,char *fmt,...);
 ```
+## build
+###linux 
+    * build install libuv ,see https://github.com/libuv/libuv
+    * make
+
+

@@ -138,7 +138,7 @@ uvc_ctx *uvc_create(unsigned int size,coro_func func,void *arg){
 	uvc_ctx *ctx=(uvc_ctx *)malloc(sizeof(uvc_ctx));
 	memset(ctx,0,sizeof(uvc_ctx));
 	//ctx->data=arg;
-	coro_stack_alloc(&ctx->stack,128);
+	coro_stack_alloc(&ctx->stack,size);
 	coro_create(&ctx->cur,func,arg,ctx->stack.sptr,ctx->stack.ssze);
 	return ctx;
 }
