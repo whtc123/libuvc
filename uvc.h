@@ -13,20 +13,33 @@ typedef enum uvc_io_type_s{
 	UVC_IO_FS
 }uvc_io_type_t;
 
+typedef enum uvc_status_s{
+	UVC_STATUS_INIT,
+	UVC_STATUS_PENDING,
+	UVC_STATUS_READY,
+	UVC_STATUS_RUNING,
+	UVC_STATUS_DIE
+}uvc_status;
 
 struct _uvc_ctx{
+	char name[64];
 	coro_context *prev;
 	coro_context cur;
 	struct coro_stack stack;
 	uv_timer_t timer;
 	void *data;
 	queue_t i_node;//for channel queue
-	queue_t s_node;//for stack queue
+	//queue_t s_node;//for stack queue
+	queue_t task_node;
+	uvc_status status;
 	void *cbuf;
+	
 };
 typedef struct _uvc_ctx uvc_ctx;
 void uvc_init();
-uvc_ctx *uvc_create(unsigned int size,coro_func func,void *arg);
+void uvc_create(char *name, unsigned int size, coro_func func, void *arg);
+void uvc_ctx_set_name(char *name);
+char *uvc_ctx_get_name();
 void uvc_return( );
 void uvc_yield( );
 void uvc_resume(uvc_ctx *ctx);
@@ -65,6 +78,8 @@ int channel_close(channel_t c);
 int channel_write(channel_t c,void *buf);
 int channel_read(channel_t c,void *buf);
 channel_t channel_select(int need_default, char *fmt, ...);
+
+
 #if __cplusplus
 }
 #endif

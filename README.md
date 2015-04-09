@@ -4,7 +4,7 @@
 
 a libuv and libcoro bind lib,help you write synchronization no-callback high-performance network Program. my goal is a network and coroutines framework for embedded system or pc.
 
-this lib has tested on linux and windows.
+this lib has tested on linux(arm x86 x64) and windows.
 
 ##example for http get download file
 
@@ -20,7 +20,8 @@ static void download(void *ptr){
     if(cnt <=0){
         goto err;
     }
-    sprintf(buf,"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nContent-Type: application/zip\r\n\r\n",2735243);
+    sprintf(buf,"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n"
+        "Content-Type: application/zip\r\n\r\n",2735243);
     cnt=uvc_write(io,buf,strlen(buf));
     if(cnt!=0){
         goto err;
@@ -80,8 +81,7 @@ void server(void *ptr)
             exit(1);
         }
         //printf("get a new connection\n");
-        ctx_client =uvc_create(10*1024,download,io_client);
-        uvc_resume(ctx_client);
+        uvc_create("download_task",10*1024,download,io_client);
     }
     uvc_close(&io);
     uvc_return();
@@ -89,9 +89,7 @@ void server(void *ptr)
 
 
 int main(){
-
-    uvc_ctx *server_ctx = uvc_create(128,server,NULL);
-    uvc_resume(server_ctx);
+    uvc_create("listener",,128,server,NULL);
     uvc_schedule();
 }
 ```
@@ -134,10 +132,8 @@ void Consumer(void *ptr){
 int main(){
 	channel_t ch;
 	ch = channel_create(0, sizeof(int));
-	uvc_ctx *ctx1 = uvc_create(10 * 1024, Producer, (void *)&ch);
-	uvc_resume(ctx1);
-	uvc_ctx *ctx = uvc_create(10 * 1024, Consumer, (void *)&ch);
-	uvc_resume(ctx);
+	uvc_create(10 * 1024, Producer, (void *)&ch);
+	uvc_create(10 * 1024, Consumer, (void *)&ch);
 	uvc_schedule();
 }
 ```
@@ -153,7 +149,7 @@ int main(){
 
 ##api
 ```c
-uvc_ctx *uvc_create(unsigned int size,coro_func func,void *arg);
+uvc_ctx *uvc_create(char *name,unsigned int size,coro_func func,void *arg);
 void uvc_return( );
 void uvc_yield( );
 void uvc_resume(uvc_ctx *ctx);
@@ -185,5 +181,29 @@ channel_t channel_select(int need_default,char *fmt,...);
 ###linux 
     * build install libuv ,see https://github.com/libuv/libuv
     * make
+## examples
+    *chan.c   channel example
+    *uvc.c    io example
+
+## channel
+
+The channel is implement like golang's chan and select
+###channel_select
+    need_default  0,if no channel active ,the select will 
+                  be blocked,else will be return immediately.
+    fmt           'r' of 'w', waiting channel event
+
+###example
+```
+    channel_t c;
+    c=channel_select(1,"rw",ch1,ch2);
+    if(c == ch1){
+        channel_read(ch1,&buf);
+    }else if(c==ch2){
+        channel_write(ch2,&buf);
+    }else{
+        //no channel active
+    }
 
 
+```

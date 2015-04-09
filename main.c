@@ -57,10 +57,10 @@ err:
 void download(void *ptr){
 
 	uvc_io *fs = malloc(sizeof(uvc_io));
-	uvc_io_create(fs,UV_FS);
+	uvc_io_create(fs,UVC_IO_FS);
 	uvc_io *io=ptr;
 	ssize_t cnt=0;
-	char buf[256];
+	char buf[2048];
 	 cnt = uvc_read(io,buf,sizeof(buf));
 	 if(cnt <=0){
 		 goto err;
@@ -102,10 +102,9 @@ err:
 void server(void *ptr)
 {
 	int ret=0;
-	uvc_ctx *ctx_client;
 	uvc_io io;
 	uvc_io *io_client;
-	uvc_io_create(&io,UV_TCP);
+	uvc_io_create(&io,UVC_IO_TCP);
 	ret = uvc_tcp_bind(&io,"0.0.0.0",8080);
 	if(ret!=0){
 		printf("error bind:%d\n",ret);
@@ -120,15 +119,14 @@ void server(void *ptr)
 		}
 
 		io_client = (uvc_io *)malloc(sizeof(uvc_io));
-		uvc_io_create(io_client,UV_TCP);
+		uvc_io_create(io_client,UVC_IO_TCP);
 		ret = uvc_accept(&io,io_client);
 		if(ret !=0){
 			printf("error accept:%d\n",ret);
 			exit(1);
 		}
 		//printf("get a new connection\n");
-		ctx_client =uvc_create(10*1024,http_hello,io_client);
-		uvc_resume(ctx_client);
+		uvc_create("hello",10*1024,download,io_client);
 	}
 	uvc_close(&io);
 	uvc_return();
@@ -136,7 +134,6 @@ void server(void *ptr)
 
 int main(){
 
-	uvc_ctx *server_ctx = uvc_create(128,server,NULL);
-	uvc_resume(server_ctx);
+	uvc_create("listen",128,server,NULL);
 	uvc_schedule();	
 }
